@@ -1,0 +1,10 @@
+FROM node:20-alpine
+
+WORKDIR /workspaces/Myinstaller
+
+RUN apk add --no-cache git openssh-client
+
+# Install global dev tools
+RUN npm install -g tsx prisma
+
+CMD ["sleep", "infinity"]

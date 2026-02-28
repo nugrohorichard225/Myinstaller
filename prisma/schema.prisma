@@ -1,0 +1,277 @@
+// ==============================================================================
+// MyInstaller — Prisma Schema
+// ==============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum AccessKeyStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum JobStatus {
+  QUEUED
+  VALIDATING
+  CONNECTING
+  RENDERING
+  PROVISIONING
+  REBOOTING
+  VERIFYING
+  COMPLETED
+  FAILED
+  CANCELLED
+  DRY_RUN_COMPLETED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  SUCCESS
+}
+
+enum CredentialType {
+  PASSWORD
+  PRIVATE_KEY
+}
+
+enum ProfileCategory {
+  LINUX_BASE
+  LINUX_DOCKER
+  LINUX_HARDENED
+  WINDOWS_TEMPLATE
+  RDP_READY
+  CLOUD_INIT
+  CUSTOM_PROVISION
+  RECOVERY
+  DIAGNOSTICS
+}
+
+// ── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions           Session[]
+  deploymentJobs     DeploymentJob[]
+  savedTargets       SavedTarget[]
+  targetCredentials  TargetCredential[]
+  accessKeyRedemptions AccessKeyRedemption[]
+  auditLogs          AuditLog[]  @relation("AuditActor")
+
+  @@index([email])
+  @@index([role])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+model AccessKey {
+  id              String          @id @default(cuid())
+  code            String          @unique
+  status          AccessKeyStatus @default(ACTIVE)
+  maxRedemptions  Int             @default(1)
+  redeemedCount   Int             @default(0)
+  expiresAt       DateTime?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  redemptions AccessKeyRedemption[]
+
+  @@index([code])
+  @@index([status])
+}
+
+model AccessKeyRedemption {
+  id          String   @id @default(cuid())
+  accessKeyId String
+  userId      String
+  redeemedAt  DateTime @default(now())
+
+  accessKey AccessKey @relation(fields: [accessKeyId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([accessKeyId])
+  @@index([userId])
+}
+
+model DeploymentProfile {
+  id               String          @id @default(cuid())
+  slug             String          @unique
+  name             String
+  osFamily         String
+  osVersion        String
+  category         ProfileCategory
+  description      String
+  longDescription  String?         @db.Text
+  scriptTemplate   String?         @db.Text
+  cloudInitTemplate String?        @db.Text
+  variablesSchema  Json?
+  estimatedDuration Int            @default(300) // seconds
+  visibility       String          @default("public")
+  isFeatured       Boolean         @default(false)
+  isActive         Boolean         @default(true)
+  tags             String[]
+  createdBy        String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  deploymentJobs DeploymentJob[]
+
+  @@index([slug])
+  @@index([category])
+  @@index([isActive])
+}
+
+model DeploymentJob {
+  id              String    @id @default(cuid())
+  ownerId         String
+  profileId       String
+  targetLabel     String
+  targetHost      String
+  targetPort      Int       @default(22)
+  targetUser      String    @default("root")
+  authMethod      String    @default("password")
+  providerLabel   String?
+  regionLabel     String?
+  status          JobStatus @default(QUEUED)
+  progress        Int       @default(0)
+  dryRun          Boolean   @default(false)
+  autoReboot      Boolean   @default(false)
+  healthCheck     Boolean   @default(true)
+  extraPackages   String[]
+  envVars         Json?
+  postInstallCmds String[]
+  notes           String?   @db.Text
+  jobOptions      Json?
+  adapterUsed     String?
+  errorSummary    String?   @db.Text
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  owner   User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  profile DeploymentProfile @relation(fields: [profileId], references: [id])
+  logs    DeploymentJobLog[]
+
+  @@index([ownerId])
+  @@index([profileId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DeploymentJobLog {
+  id        String   @id @default(cuid())
+  jobId     String
+  level     LogLevel @default(INFO)
+  message   String   @db.Text
+  step      String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  job DeploymentJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([createdAt])
+}
+
+model SavedTarget {
+  id            String   @id @default(cuid())
+  ownerId       String
+  label         String
+  host          String
+  port          Int      @default(22)
+  username      String   @default("root")
+  providerLabel String?
+  regionLabel   String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner       User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  credentials TargetCredential[]
+
+  @@index([ownerId])
+}
+
+model TargetCredential {
+  id             String         @id @default(cuid())
+  ownerId        String
+  savedTargetId  String?
+  credentialType CredentialType
+  encryptedValue String         @db.Text
+  maskedPreview  String
+  label          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  owner       User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  savedTarget SavedTarget? @relation(fields: [savedTargetId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([savedTargetId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String?
+  entityId   String?
+  summary    String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}
